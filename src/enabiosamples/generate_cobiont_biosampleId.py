@@ -122,6 +122,10 @@ def main():
     parser.add_option('-o', '--output_file',
             dest="output",
             default="",
+            )
+    parser.add_option('-g', '--debug',
+            dest="debug",
+            action='store_true'
             ) 
 
     (options, args) = parser.parse_args()
@@ -138,7 +142,7 @@ def main():
         enviromment_params = json.load(json_file)
 
     # Check connection to local tol-sdk
-    ena_datasource = EnaDataSource(enviromment_params['credentials'])
+    ena_datasource = EnaDataSource(enviromment_params['credentials'], debug=options.debug)
 
     # Import cobiont csv
     df_cobionts = pd.read_csv(options.data)
@@ -167,7 +171,7 @@ def main():
             'tolid': [cobiont["cobiont_tolid"], None],
             'common name': ["", None],
             'sex': ["NOT_COLLECTED", None],
-            'lifestage': ["NOT_COLLECTED", None],
+            'lifestage': ["not collected", None],
             'symbiont': ['Y', None],
             'sample symbiont of': [cobiont["host_biospecimen"], None]
         }
