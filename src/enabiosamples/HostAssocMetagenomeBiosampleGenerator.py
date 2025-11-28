@@ -87,6 +87,35 @@ class HostAssocMetagenomeBiosampleGenerator:
                 else:
                     primary_mg_dict[host_key] = host_val
 
+        # Handle missing geographic coordinates by using start/end values
+        if "geographic location (latitude)" not in primary_mg_dict:
+            if "geographic location start (latitude_start)" in host_dict:
+                child_val = host_dict[
+                    "geographic location start (latitude_start)"
+                ].copy()
+                try:
+                    coordinate = float(child_val[0])
+                    child_val[0] = f"{coordinate:.2f}"
+                except ValueError:
+                    self.log(
+                        f"Warning: Could not parse latitude start value '{child_val[0]}' as a number"
+                    )
+                primary_mg_dict["geographic location (latitude)"] = child_val
+
+        if "geographic location (longitude)" not in primary_mg_dict:
+            if "geographic location start (longitude_start)" in host_dict:
+                child_val = host_dict[
+                    "geographic location start (longitude_start)"
+                ].copy()
+                try:
+                    coordinate = float(child_val[0])
+                    child_val[0] = f"{coordinate:.2f}"
+                except ValueError:
+                    self.log(
+                        f"Warning: Could not parse longitude start value '{child_val[0]}' as a number"
+                    )
+                primary_mg_dict["geographic location (longitude)"] = child_val
+
         # Check for missing fields
         mandatory_missing = []
         recommended_missing = []
