@@ -1,10 +1,12 @@
 #!/usr/bin/env python
 
-import uuid
 import datetime
+import io
 import re
-from typing import Dict, List, Tuple, Optional, Any
-from ena_datasource import EnaDataSource
+import uuid
+from typing import Any, Dict, List, Optional, Tuple
+
+from enabiosamples.ena_datasource import EnaDataSource
 
 
 class HostAssocMetagenomeBiosampleGenerator:
@@ -23,30 +25,34 @@ class HostAssocMetagenomeBiosampleGenerator:
 
     def log(self, message: str) -> None:
         curr_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        with open(self.log_file, "a") as file_obj:
-            file_obj.write(f"({curr_time}) {message}\n")
+
+        if isinstance(self.log_file, io.TextIOWrapper):
+            self.log_file.write(f"({curr_time}) {message}\n")
+        else:
+            with open(self.log_file, "a") as file_obj:
+                file_obj.write(f"({curr_time}) {message}\n")
 
     def copy_checklist_items(
         self,
-        field_dict: Dict[str, Any],
-        parent_dict: Dict[str, Any],
-        child_dict: Dict[str, Any],
+        checklist_dict: Dict[str, Any],
+        host_dict: Dict[str, Any],
+        primary_mg_dict: Dict[str, Any],
     ) -> Dict[str, Any]:
         """
         Copy checklist items from parent to child dictionary and validate mandatory fields.
 
         Args:
-            field_dict: Dictionary containing field definitions from checklist
-            parent_dict: Parent dictionary to copy from
-            child_dict: Child dictionary to copy to
+            checklist_dict: Dictionary containing field definitions from checklist
+            host_dict: Parent dictionary to copy from
+            primary_mg_dict: Child dictionary to copy to
 
         Returns:
             Updated child dictionary with copied fields
         """
-        for parent_key, parent_val in parent_dict.items():
-            if parent_key not in child_dict:
-                if parent_key == "sex":
-                    child_val = parent_val.copy()
+        for host_key, host_val in host_dict.items():
+            if host_key not in primary_mg_dict and host_key in checklist_dict:
+                if host_key == "sex":
+                    child_val = host_val.copy()
                     child_val[0] = child_val[0].lower()
 
                     if "hermaphrodite" in child_val[0]:
@@ -54,40 +60,69 @@ class HostAssocMetagenomeBiosampleGenerator:
                     elif "sexual morph" in child_val[0]:
                         child_val[0] = "other"
 
-                    child_dict["host sex"] = child_val
+                    primary_mg_dict["host sex"] = child_val
 
-                elif parent_key == "lifestage":
-                    child_dict["host life stage"] = parent_val
+                elif host_key == "lifestage":
+                    primary_mg_dict["host life stage"] = host_val
 
-                elif parent_key in [
+                elif host_key in [
                     "geographic location (latitude)",
                     "geographic location (longitude)",
                 ]:
-                    child_val = parent_val.copy()
+                    child_val = host_val.copy()
 
                     try:
                         coordinate = float(child_val[0])
                         child_val[0] = f"{coordinate:.2f}"
                     except ValueError:
                         self.log(
-                            f"Warning: Could not parse {parent_key} value '{child_val[0]}' as a number"
+                            f"Warning: Could not parse {host_val} value '{child_val[0]}' as a number"
                         )
 
-                    child_dict[parent_key] = child_val
+                    primary_mg_dict[host_key] = child_val
 
-                elif parent_key == "organism":
+                elif host_val == "organism":
                     continue
 
                 else:
-                    child_dict[parent_key] = parent_val
+                    primary_mg_dict[host_key] = host_val
+
+        # Handle missing geographic coordinates by using start/end values
+        if "geographic location (latitude)" not in primary_mg_dict:
+            if "geographic location start (latitude_start)" in host_dict:
+                child_val = host_dict[
+                    "geographic location start (latitude_start)"
+                ].copy()
+                try:
+                    coordinate = float(child_val[0])
+                    child_val[0] = f"{coordinate:.2f}"
+                except ValueError:
+                    self.log(
+                        f"Warning: Could not parse latitude start value '{child_val[0]}' as a number"
+                    )
+                primary_mg_dict["geographic location (latitude)"] = child_val
+
+        if "geographic location (longitude)" not in primary_mg_dict:
+            if "geographic location start (longitude_start)" in host_dict:
+                child_val = host_dict[
+                    "geographic location start (longitude_start)"
+                ].copy()
+                try:
+                    coordinate = float(child_val[0])
+                    child_val[0] = f"{coordinate:.2f}"
+                except ValueError:
+                    self.log(
+                        f"Warning: Could not parse longitude start value '{child_val[0]}' as a number"
+                    )
+                primary_mg_dict["geographic location (longitude)"] = child_val
 
         # Check for missing fields
         mandatory_missing = []
         recommended_missing = []
         optional_missing = []
 
-        for field_key, field_val in field_dict.items():
-            if field_key not in child_dict:
+        for field_key, field_val in checklist_dict.items():
+            if field_key not in primary_mg_dict:
                 requirement_level = field_val[0]
 
                 if requirement_level == "mandatory":
@@ -105,7 +140,7 @@ class HostAssocMetagenomeBiosampleGenerator:
             for field in mandatory_missing:
                 self.log(f"  {field}")
 
-        return child_dict
+        return primary_mg_dict
 
     def validate_samples_with_checklist(
         self, field_dict: Dict[str, Any], samples_dict: Dict[str, Any]
@@ -155,7 +190,7 @@ class HostAssocMetagenomeBiosampleGenerator:
         self, primary_data: Dict[str, Any]
     ) -> Dict[str, Any]:
         """
-        Create a primary metagenome sample dictionary.
+        Create a primary metagenome sample dictionary for validation with the checklist.
 
         Args:
             primary_data: Dictionary containing primary metagenome data with keys:
@@ -204,11 +239,10 @@ class HostAssocMetagenomeBiosampleGenerator:
         checklist: str,
     ) -> Dict[str, Any]:
         """
-        Create a binned metagenome sample dictionary.
+        Create a binned metagenome sample dictionary for validation with the checklist.
 
         Args:
             binned_data: Dictionary containing binned sample data with keys:
-            Dictionary containing bin/mag data with keys:
                 - tol_id: ToLID of bin
                 - taxon: taxonomic name of bin
                 - taxon_id: TaxID of bin
@@ -299,13 +333,11 @@ class HostAssocMetagenomeBiosampleGenerator:
         self, primary_data: Dict[str, Any]
     ) -> Tuple[bool, Dict[str, Any], Dict[str, Any]]:
         """
-        Process a primary metagenome sample.
+        Process and validate a primary metagenome sample.
 
-        Args:
-            primary_data: Dictionary containing primary metagenome data
-
-        Returns:
-            Tuple of (validation_success, primary_sample_dict, host_sample_dict)
+        Takes a primary metagenome dict, pulls the host host data from
+        ENA for the biosample and the host checklist, processes the dict
+        and validates the result against the checklist.
         """
         self.log("Processing primary metagenome")
 
@@ -344,16 +376,11 @@ class HostAssocMetagenomeBiosampleGenerator:
         checklist: str,
     ) -> Tuple[bool, Dict[str, Any]]:
         """
-        Process binned metagenome samples.
+        Process and validate metagenome bins.
 
-        Args:
-            binned_data_list: List of dictionaries containing binned sample data
-            primary_dict: Primary sample dictionary
-            host_scientific_name: Host scientific name
-            host_taxid: Host taxonomic ID
-
-        Returns:
-            Tuple of (validation_success, binned_samples_dict)
+        Takes a list of metagenome bin dicts, a primary dict,
+        and a checklist, and some metadata. For each dict,
+        process it and validate the result against the checklist.
         """
         self.log("Processing binned samples")
 
@@ -388,19 +415,11 @@ class HostAssocMetagenomeBiosampleGenerator:
         mag_data_list: Optional[List[Dict[str, Any]]] = None,
     ) -> Tuple[bool, Dict[str, Any]]:
         """
-        Generate ENA biosample IDs for metagenome samples.
-
-        Args:
-            primary_data: Dictionary containing primary metagenome data
-            binned_data_list: Optional list of binned sample data
-            mag_data_list: Optional list of MAG sample data
+        Generate ENA biosample IDs for metagenome samples. Takes a single primary dict,
+        and two lists of bin dicts - mags and binned metagenomes.
 
         Returns:
-            Tuple of (success, results_dict) where results_dict contains:
-                - 'primary': primary sample with biosample ID
-                - 'binned': dict of binned samples with biosample IDs
-                - 'mags': dict of MAG samples with biosample IDs
-                - 'summary': list of [type, tolid, biosample_accession] for output
+            dict of dicts - { tolid, biosample } for each of 'primary', 'magsbins'
         """
         # Process primary metagenome
         primary_validation_passed, primary_sample_dict, host_sample_dict = (
